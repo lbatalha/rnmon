@@ -1,0 +1,19 @@
+[project]
+name = "rnmon"
+version = "0.1.0"
+description = "RNS Monitoring Agent"
+readme = "README.md"
+authors = [
+    { name = "lbatalha" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "rns>=0.9.5",
+]
+
+[project.scripts]
+rnmon = "rnmon.rnmon:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
