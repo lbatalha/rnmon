@@ -1,0 +1,15 @@
+batch_size: 1000
+flush_interval: 5
+
+
+targets:
+  - name: reticulum1
+    type: transport_node
+    dest_identity: 434bd78904362de4a11891596f7ff9ce
+    rpc_identity: ~/.config/nomadnetwork/storage/identity
+    interval: 2
+  - name: reticulum2
+    type: transport_node
+    dest_identity: b2fcf0fc7388d076b806d4824e499a01
+    rpc_identity: ~/.config/nomadnetwork/storage/identity
+    interval: 2

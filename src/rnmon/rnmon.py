@@ -2,21 +2,62 @@ import os
 import sys
 import time
 import random
+import re
 import argparse
-import pprint
+import importlib
 import concurrent.futures
-import multiprocessing
+import multiprocessing as mp
+from collections import deque
+from pprint import pp
+from queue import Empty, Full
+
+import requests
+from yaml import safe_load, dump
 
 import RNS
 RNS.Link.KEEPALIVE=1
 RNS.Link.STALE_TIME=2*RNS.Link.KEEPALIVE
 # TODO: PR to have these be configurable as arguments to RNS.Link.__init__
 
+# Line protocol translation table to escape invalid tag/label characters
+lproto_label_ttable = str.maketrans({
+    " ": "\\ ",
+    ",": "\\,"
+})
+
+
+
+metric_queue = mp.Queue(10000)
+
 class RNSRemote:
 
     ASPECTS = ("rnstransport", "remote", "management")
 
-    def __init__(self, interval: int, dest_ident_hexhash: str, identity: os.PathLike, configpath):
+    NODE_METRICS = {
+        "rxb": "rns_transport_node_rx_bytes_total",
+        "txb": "rns_transport_node_tx_bytes_total",
+        "transport_uptime": "rns_transport_node_uptime_s",
+        "link_count": "rns_transport_node_link_count", # returned as second array element, unlabelled...
+    }
+    NODE_LABELS = {
+        "transport_id": "transport_id",
+    }
+    IFACE_METRICS = {
+        "clients": "rns_iface_client_count",
+        "bitrate": "rns_iface_bitrate",
+        "status": "rns_iface_up",
+        "mode": "rns_iface_mode",
+        "rxb": "rns_iface_rx_bytes_total",
+        "txb": "rns_iface_tx_bytes_total",
+        "held_announces": "rns_iface_announces_held_count",
+        "announce_queue": "rns_iface_announces_queue_count",
+    }
+    IFACE_LABELS = {
+        "type": "type",
+        "short_name": "name",
+    }
+
+    def __init__(self, interval: int, dest_ident_hexhash: str, identity: os.PathLike, configpath: str, verbosity: int, **kwargs):
         self.alive: bool = True
         self.link: RNS.Link
         self.remote_dest: RNS.Destination
@@ -35,7 +76,7 @@ class RNSRemote:
             '.'.join(RNSRemote.ASPECTS), bytes.fromhex(self.dest_ident_hexhash))
 
         # Initialize Reticulum Instance
-        self.rns = RNS.Reticulum(configdir=configpath, verbosity=2)
+        self.rns = RNS.Reticulum(configdir=configpath, verbosity=verbosity)
 
         RNS.log(f"Loading identity from '{self.identity}'", RNS.LOG_INFO)
         self.mgmt_identity = RNS.Identity.from_file(os.path.expanduser(self.identity))
@@ -58,10 +99,14 @@ class RNSRemote:
     def run(self):
         print(f"Starting Main")
         while self.alive:
+            # try:
+            #    print(metric_queue.get_nowait())
+            # except Empty:
+            #     RNS.log("Metric queue is empty, nothing to get", RNS.LOG_WARNING)
             if self.link.status != RNS.Link.ACTIVE:
                 RNS.log(f"Link Status: {self.link.status}", RNS.LOG_DEBUG) #DEBUG
                 RNS.log(f"Link establishment timeout: {self.link.establishment_timeout}", RNS.LOG_DEBUG) #DEBUG
-                time.sleep(1) #DEBUG
+                time.sleep(0.2) #DEBUG
                 continue
             try:
                 # No point in spamming requests if the last one hasnt timed out yet, save local and network resources
@@ -78,6 +123,7 @@ class RNSRemote:
                 RNS.log(f"Error while sending request over the link: {str(e)}")
 
             time.sleep(self.interval)
+
 
     def _ensure_path(self):
         if not RNS.Transport.has_path(self.dest_hash):
@@ -122,12 +168,58 @@ class RNSRemote:
         self._establish_link()
 
     def _on_response(self, response: RNS.RequestReceipt) -> None:
-        data = response.response
-        RNS.log(f"{self.dest_ident_hexhash} responded with size: {len(data)}") #DEBUG
-        #pprint.pp(len(data)) #DEBUG
+        #pp(response.response) #DEBUG
+        self._parse_metrics(response.response)
 
     def _on_request_fail(self, response: RNS.RequestReceipt) -> None:
         RNS.log(f"The request {RNS.prettyhexrep(response.request_id)} failed.", RNS.LOG_DEBUG)
+
+    def _parse_metrics(self, data: list):
+        iface_labels = {}
+        iface_metrics = {}
+        node_labels = {}
+        node_metrics = {}
+        t = time.time()
+        #pp(data[0])
+
+        # link_count isnt labeled >.>
+        node_metrics[RNSRemote.NODE_METRICS['link_count']] = data[1]
+
+        for mk, mv in data[0].items():
+            if mk == 'interfaces':
+                for iface in mv:
+                    for k, v in iface.items():
+                        if k in RNSRemote.IFACE_METRICS:
+                            iface_metrics[RNSRemote.IFACE_METRICS[k]] = v
+                        if k in RNSRemote.IFACE_LABELS:
+                            iface_labels[RNSRemote.IFACE_LABELS[k]] = v.translate(lproto_label_ttable)
+                    iface_labels['identity'] = self.dest_ident_hexhash
+
+                    # convert to influx line format
+                    labels = ",".join(f"{k}={v}" for k, v in iface_labels.items())
+                    for k, v in iface_metrics.items():
+                        metric = f"{k},{labels} value={v} {t}"
+                        try:
+                            metric_queue.put_nowait(metric)
+                        except Full:
+                            RNS.log("Metric queue is full, dropping older metrics", RNS.LOG_EXTREME)
+                            metric_queue.get_nowait()
+                            metric_queue.put_nowait(metric)
+            else:
+                if mk in RNSRemote.NODE_METRICS:
+                    node_metrics[RNSRemote.NODE_METRICS[mk]] = mv
+
+                node_labels['identity'] = self.dest_ident_hexhash
+                #convert to influx line format
+                labels = ",".join(f"{k}={v}" for k, v in node_labels.items())
+                for k, v in node_metrics.items():
+                    metric = f"{k},{labels} value={v} {t}"
+                    try:
+                        metric_queue.put_nowait(metric)
+                    except Full:
+                        RNS.log("Metric queue is full, dropping older metrics", RNS.LOG_EXTREME)
+                        metric_queue.get_nowait()
+                        metric_queue.put_nowait(metric)
 
 
 def validate_hexhash(hexhash: str) -> None:
@@ -135,74 +227,83 @@ def validate_hexhash(hexhash: str) -> None:
         if len(hexhash) != dest_len:
             raise TypeError(f"Destination length is invalid, must be {dest_len} hexadecimal characters ({dest_len//2} bytes)")
 
+class InfluxWriter:
+    def __init__(self, batch_size: int = 1000, flush_interval: int = 5, **kwargs):
+        self.maxlen = batch_size
+        self.flush_interval = flush_interval
+        self.run()
+
+    def run(self):
+        push_queue = deque([],maxlen=self.maxlen)
+        metric_count: int = 0
+        last_push = time.time()
+        print("Started InfluxWriter")
+        with open("/Users/lbatalha/src/rnmon/metrics.log", "w", buffering=1) as f:
+            while True:
+                try:
+                    push_queue.append(metric_queue.get_nowait())
+                    metric_count += 1
+                except Empty:
+                    pass
+                if metric_count == self.maxlen-1 or time.time() - last_push >  self.flush_interval:
+                    print(f"[InfluxWriter] Pushing metrics - Count: {metric_count} Time: {int(time.time() - last_push)}s")
+                    metric_count = 0
+                    last_push = time.time()
+                    f.write("\n".join(push_queue))
+
+                time.sleep(0.005)
+
+
 def main():
+    JOB_TYPES = {
+        "transport_node": RNSRemote,
+        "influx": InfluxWriter
+    }
     try:
         parser = argparse.ArgumentParser(description="Simple request/response example")
-        parser.add_argument(
-            "-n",
-            "--interval",
-            action="store",
-            default=60,
-            help="path to alternative Reticulum config directory",
-            type=int
-        )
-        parser.add_argument(
-            "--config",
-            action="store",
-            default=None,
-            help="path to alternative Reticulum config directory",
-            type=str
-        )
-        parser.add_argument(
-            "-i",
-            "--identity",
-            action="store",
-            default=None,
-            help="path to identity to usee for remote management",
-            type=str
-        )
-        parser.add_argument(
-            "destination",
-            nargs="?",
-            default=None,
-            help="hexadecimal hash of the destination identity",
-            type=str
-        )
-
+        parser.add_argument('-v', '--verbose', action='count', default=0)
+        parser.add_argument("--config", type=str, default=None, \
+                            help="path to Reticulum config directory")
+        parser.add_argument("targets", nargs='?', type=argparse.FileType('r'), default="scraping.yaml", \
+                            help="path to target list file")
         args = parser.parse_args()
 
-        if args.config:
-            configarg = args.config
-        else:
-            configarg = None
+        target_config = safe_load(args.targets)
 
-        if (args.destination == None):
-            print("")
-            parser.print_help()
-            print("")
-        else:
-            with concurrent.futures.ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn")) as executor:
-                jobs = [
-                    {"interval": args.interval, "dest_ident_hexhash": args.destination, "identity": args.identity, "configpath": configarg},
-                    {"interval": args.interval, "dest_ident_hexhash": "someotherhash", "identity": args.identity, "configpath": configarg}
-                ]
-                futures = {executor.submit(RNSRemote, **job): job for job in jobs}
-                while len(futures) > 0:
-                    new_jobs = {}
-                    print(new_jobs)
-                    done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
-                    for future in done:
-                        if future.exception():
-                            print(f"Job exited with exception: \"{future.exception()}\"")
-                            job = futures[future]
-                            new_jobs[executor.submit(RNSRemote, **job)] = job
-                    for future in not_done:
+        with concurrent.futures.ProcessPoolExecutor(mp_context=mp.get_context("fork")) as executor:
+            jobs = []
+            # Setup Scraping Jobs
+            for target in target_config['targets']:
+                jobs.append({
+                    "type": target['type'],
+                    "interval": target['interval'],
+                    "dest_ident_hexhash": target['dest_identity'],
+                    "identity": target['rpc_identity'],
+                    "configpath": args.config,
+                    "verbosity": args.verbose
+                })
+            # Setup InfluxWriter push job
+            jobs.append({
+                "type": "influx",
+                "batch_size": target_config['batch_size'],
+                "flush_interval": target_config['flush_interval'],
+            })
+            # I WILL commit crimes >:3
+            futures = {executor.submit(JOB_TYPES[job['type']], **job): job for job in jobs}
+            while len(futures) > 0:
+                new_jobs = {}
+                done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
+                for future in done:
+                    if future.exception():
+                        print(f"Job exited with exception: \"{future.exception()}\"")
                         job = futures[future]
-                        new_jobs[executor.submit(RNSRemote, **job)] = job
-                    futures = new_jobs
+                        new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
+                for future in not_done:
+                    job = futures[future]
+                    new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
+                futures = new_jobs
 
     except KeyboardInterrupt:
-        print("")
         sys.exit(0)
 
 if __name__ == '__main__':
