@@ -25,8 +25,6 @@ lproto_label_ttable = str.maketrans({
     ",": "\\,"
 })
 
-
-
 metric_queue = mp.Queue(10000)
 
 class RNSRemote:
@@ -51,6 +49,8 @@ class RNSRemote:
         "txb": "rns_iface_tx_bytes_total",
         "held_announces": "rns_iface_announces_held_count",
         "announce_queue": "rns_iface_announces_queue_count",
+        "incoming_announce_frequency": "rns_iface_announces_rx_rate",
+        "outgoing_announce_frequency": "rns_iface_announces_tx_rate",
     }
     IFACE_LABELS = {
         "type": "type",
@@ -78,6 +78,8 @@ class RNSRemote:
         # Initialize Reticulum Instance
         self.rns = RNS.Reticulum(configdir=configpath, verbosity=verbosity)
 
+        self._ensure_path()
+
         RNS.log(f"Loading identity from '{self.identity}'", RNS.LOG_INFO)
         self.mgmt_identity = RNS.Identity.from_file(os.path.expanduser(self.identity))
         if not self.mgmt_identity:
@@ -85,7 +87,7 @@ class RNSRemote:
             raise FileNotFoundError("Failed to load identity, check path and permissions.")
         RNS.log(f"Loaded identity from '{self.identity}'", RNS.LOG_INFO)
 
-        RNS.log(f"Setting up Destination Config: {RNS.prettyhexrep(self.dest_hash)}")
+        RNS.log(f"Setting up Destination: {RNS.prettyhexrep(self.dest_hash)}", RNS.LOG_INFO)
         self.remote_dest = RNS.Destination(
             RNS.Identity.recall(self.dest_hash),
             RNS.Destination.OUT,
@@ -193,6 +195,7 @@ class RNSRemote:
                             iface_metrics[RNSRemote.IFACE_METRICS[k]] = v
                         if k in RNSRemote.IFACE_LABELS:
                             iface_labels[RNSRemote.IFACE_LABELS[k]] = v.translate(lproto_label_ttable)
+
                     iface_labels['identity'] = self.dest_ident_hexhash
 
                     # convert to influx line format
@@ -210,6 +213,7 @@ class RNSRemote:
                     node_metrics[RNSRemote.NODE_METRICS[mk]] = mv
 
                 node_labels['identity'] = self.dest_ident_hexhash
+
                 #convert to influx line format
                 labels = ",".join(f"{k}={v}" for k, v in node_labels.items())
                 for k, v in node_metrics.items():
@@ -259,35 +263,36 @@ def main():
         "transport_node": RNSRemote,
         "influx": InfluxWriter
     }
-    try:
-        parser = argparse.ArgumentParser(description="Simple request/response example")
-        parser.add_argument('-v', '--verbose', action='count', default=0)
-        parser.add_argument("--config", type=str, default=None, \
-                            help="path to Reticulum config directory")
-        parser.add_argument("targets", nargs='?', type=argparse.FileType('r'), default="scraping.yaml", \
-                            help="path to target list file")
-        args = parser.parse_args()
 
-        target_config = safe_load(args.targets)
+    parser = argparse.ArgumentParser(description="Simple request/response example")
+    parser.add_argument('-v', '--verbose', action='count', default=0)
+    parser.add_argument("--config", type=str, default=None, \
+                        help="path to Reticulum config directory")
+    parser.add_argument("targets", nargs='?', type=argparse.FileType('r'), default="scraping.yaml", \
+                        help="path to target list file")
+    args = parser.parse_args()
 
-        with concurrent.futures.ProcessPoolExecutor(mp_context=mp.get_context("fork")) as executor:
-            jobs = []
-            # Setup Scraping Jobs
-            for target in target_config['targets']:
-                jobs.append({
-                    "type": target['type'],
-                    "interval": target['interval'],
-                    "dest_ident_hexhash": target['dest_identity'],
-                    "identity": target['rpc_identity'],
-                    "configpath": args.config,
-                    "verbosity": args.verbose
-                })
-            # Setup InfluxWriter push job
-            jobs.append({
-                "type": "influx",
-                "batch_size": target_config['batch_size'],
-                "flush_interval": target_config['flush_interval'],
-            })
+    target_config = safe_load(args.targets)
+
+    jobs = []
+    # Setup Scraping Jobs
+    for target in target_config['targets']:
+        jobs.append({
+            "type": target['type'],
+            "interval": target['interval'],
+            "dest_ident_hexhash": target['dest_identity'],
+            "identity": target['rpc_identity'],
+            "configpath": args.config,
+            "verbosity": args.verbose
+        })
+    # Setup InfluxWriter push job
+    jobs.append({
+        "type": "influx",
+        "batch_size": target_config['batch_size'],
+        "flush_interval": target_config['flush_interval'],
+    })
+    with concurrent.futures.ProcessPoolExecutor(mp_context=mp.get_context("fork")) as executor:
+        try:
             # I WILL commit crimes >:3
             futures = {executor.submit(JOB_TYPES[job['type']], **job): job for job in jobs}
             while len(futures) > 0:
@@ -297,14 +302,18 @@ def main():
                     if future.exception():
                         print(f"Job exited with exception: \"{future.exception()}\"")
                         job = futures[future]
-                        new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
-                for future in not_done:
-                    job = futures[future]
-                    new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
+                        print(f"Job Exception Restart: {JOB_TYPES[job['type']]}")
+                        #new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
+                    # else:
+                #for future in not_done:
+                        # job = futures[future]
+                        # print(f"Job Not Done Restart: {JOB_TYPES[job['type']]}")
+                        # new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
                 futures = new_jobs
-
-    except KeyboardInterrupt:
-        sys.exit(0)
+                time.sleep(1)
+        except KeyboardInterrupt:
+            RNS.exit()
+            sys.exit(0)
 
 if __name__ == '__main__':
     main()
