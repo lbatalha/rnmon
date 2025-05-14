@@ -176,3 +176,6 @@ cython_debug/
 .python-version
 # IDE
 .vscode/
+
+# config
+scraping.yaml
