@@ -1,0 +1,21 @@
+
+influxdb:
+  address: "https://victoriametrics/api/v2/write?db=metrics"
+  http_headers:
+    Authorization: "Bearer sometoken"
+    Stream-Mode: "1"
+  batch_size: 1000
+  flush_interval: 60
+
+
+targets:
+  - name: reticulum1
+    type: transport_node
+    dest_identity: someidentityhash
+    rpc_identity: /somedir/identity
+    interval: 10
+  - name: reticulum2
+    type: transport_node
+    dest_identity: someidentityhash
+    rpc_identity: /somedir/identity
+    interval: 10

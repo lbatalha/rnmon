@@ -1,4 +1,3 @@
-from multiprocessing.pool import TERMINATE
 import os
 import sys
 import time
@@ -60,16 +59,17 @@ class RNSRemote:
         "short_name": "name",
     }
 
-    def __init__(self, interval: int, dest_ident_hexhash: str, identity: os.PathLike, configpath: str, verbosity: int, **kwargs):
+    def __init__(self, interval: int, dest_identity: str, rpc_identity: os.PathLike, configpath: str, verbosity: int, **kwargs):
         self.link: RNS.Link
         self.remote_dest: RNS.Destination
 
         self.interval = interval
-        self.dest_ident_hexhash = dest_ident_hexhash # Destination identity hex hash
-        self.identity = identity # Identity file path to use to identify for remote management
+        self.node_name = kwargs.pop('name', dest_identity) # Optional name to use in metric labels
+        self.dest_ident_hexhash = dest_identity # Destination identity hex hash
+        self.identity = rpc_identity # Identity file path to use to identify for remote management
         self.configpath = configpath
 
-        self.request_timeout = interval
+        #self.request_timeout = interval
 
         validate_hexhash(self.dest_ident_hexhash)
 
@@ -175,19 +175,19 @@ class RNSRemote:
             RNS.log("Link closed unexpectedly, terminating", RNS.LOG_ERROR)
 
 
-    def _on_response(self, response: RNS.RequestReceipt) -> None:
-        #pp(response.response) #DEBUG
+    def _on_response(self, response) -> None:
+        RNS.log("Raw Response:", RNS.LOG_EXTREME)
         self._parse_metrics(response.response)
 
-    def _on_request_fail(self, response: RNS.RequestReceipt) -> None:
+    def _on_request_fail(self, response) -> None:
         RNS.log(f"The request {RNS.prettyhexrep(response.request_id)} failed.", RNS.LOG_DEBUG)
 
-    def _parse_metrics(self, data: list):
+    def _parse_metrics(self, data: list) -> None:
         iface_labels = {}
         iface_metrics = {}
         node_labels = {}
         node_metrics = {}
-        t = time.time()
+        t = time.time_ns()
 
         # link_count isnt labeled >.>
         node_metrics[RNSRemote.NODE_METRICS['link_count']] = data[1]
@@ -202,6 +202,7 @@ class RNSRemote:
                             iface_labels[RNSRemote.IFACE_LABELS[k]] = v.translate(lproto_label_ttable)
 
                     iface_labels['identity'] = self.dest_ident_hexhash
+                    iface_labels['node_name'] = self.node_name
 
                     # convert to influx line format
                     labels = ",".join(f"{k}={v}" for k, v in iface_labels.items())
@@ -218,6 +219,7 @@ class RNSRemote:
                     node_metrics[RNSRemote.NODE_METRICS[mk]] = mv
 
                 node_labels['identity'] = self.dest_ident_hexhash
+                node_labels['node_name'] = self.node_name
 
                 #convert to influx line format
                 labels = ",".join(f"{k}={v}" for k, v in node_labels.items())
@@ -231,15 +233,17 @@ class RNSRemote:
                         metric_queue.put_nowait(metric)
 
 
-def validate_hexhash(hexhash: str):
+def validate_hexhash(hexhash: str) -> None:
         dest_len = (RNS.Reticulum.TRUNCATED_HASHLENGTH//8)*2
         if len(hexhash) != dest_len:
             raise TypeError(f"Destination length is invalid, must be {dest_len} hexadecimal characters ({dest_len//2} bytes)")
 
 class InfluxWriter:
-    def __init__(self, batch_size: int = 1000, flush_interval: int = 5, **kwargs):
+    def __init__(self, address: str, batch_size: int = 1000, flush_interval: int = 5, **kwargs):
         self.maxlen = batch_size
         self.flush_interval = flush_interval
+        self.address = address
+        self.http_headers = kwargs.pop('http_headers', None)
         self.run()
 
     def run(self):
@@ -247,34 +251,33 @@ class InfluxWriter:
         metric_count: int = 0
         last_push = time.time()
         print("Started InfluxWriter")
-        with open("/Users/lbatalha/src/rnmon/metrics.log", "w", buffering=1) as f:
-            while not terminate.is_set():
-                try:
-                    push_queue.append(metric_queue.get_nowait())
-                    metric_count += 1
-                except Empty:
-                    pass
-                if metric_count == self.maxlen-1 or time.time() - last_push >  self.flush_interval:
-                    print(f"[InfluxWriter] Pushing metrics - Count: {metric_count} Time: {int(time.time() - last_push)}s")
-                    metric_count = 0
-                    last_push = time.time()
-                    f.write("\n".join(push_queue))
-
-                time.sleep(0.005)
-            print(f"Terminating InfluxWriter")
+        while not terminate.is_set():
+            try:
+                push_queue.append(metric_queue.get_nowait())
+                metric_count += 1
+            except Empty:
+                pass
+            if metric_count == self.maxlen-1 or time.time() - last_push >  self.flush_interval:
+                print(f"[InfluxWriter] Pushing metrics - Count: {metric_count} Time: {int(time.time() - last_push)}s")
+                metric_count = 0
+                last_push = time.time()
+                r = requests.post(self.address, headers=self.http_headers, data="\n".join(push_queue))
+                r.raise_for_status()
+            time.sleep(0.005)
+        print(f"Terminating InfluxWriter")
 
 
 
 def main():
     parser = argparse.ArgumentParser(description="Simple request/response example")
     parser.add_argument('-v', '--verbose', action='count', default=0)
-    parser.add_argument("--config", type=str, default=None, \
+    parser.add_argument("--rns-config", type=str, default=None, \
                         help="path to Reticulum config directory")
-    parser.add_argument("targets", nargs='?', type=argparse.FileType('r'), default="scraping.yaml", \
+    parser.add_argument("config", nargs='?', type=argparse.FileType('r'), default="scraping.yaml", \
                         help="path to target list file")
     args = parser.parse_args()
 
-    target_config = safe_load(args.targets)
+    config = safe_load(args.config)
 
     JOB_TYPES = {
         "transport_node": RNSRemote,
@@ -283,21 +286,10 @@ def main():
 
     jobs = []
     # Setup InfluxWriter push job
-    jobs.append({
-        "type": "influx",
-        "batch_size": target_config['batch_size'],
-        "flush_interval": target_config['flush_interval'],
-    })
+    jobs.append({"type": "influx"} | config['influxdb'])
     # Setup Scraping Jobs
-    for target in target_config['targets']:
-        jobs.append({
-            "type": target['type'],
-            "interval": target['interval'],
-            "dest_ident_hexhash": target['dest_identity'],
-            "identity": target['rpc_identity'],
-            "configpath": args.config,
-            "verbosity": args.verbose,
-        })
+    for target in config['targets']:
+        jobs.append({"configpath": args.rns_config, "verbosity": args.verbose} | target)
 
     def sig_handler(signum, frame):
         terminate.set()
@@ -312,6 +304,7 @@ def main():
                 done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
                 if terminate.is_set():
                     print("Terminating processes")
+                    time.sleep(5)
                     for pid, proc in executor._processes.items():
                         proc.terminate()
                     break
