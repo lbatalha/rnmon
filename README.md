@@ -4,7 +4,8 @@ RNMon is a simple monitoring daemon designed to monitor the status of multiple R
 
 ## Supported Applications
 
-* Reticulum Nodes (Transport mode enabled or disabled, they export mostly the same metrics)
+* Reticulum Transport Nodes (Also some metrics for non transport nodes)
+* LXMF Propagation Nodes
 
 ## Installing
 

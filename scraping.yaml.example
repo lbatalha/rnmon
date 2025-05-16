@@ -15,9 +15,9 @@ targets:
     rpc_identity: /somedir/identity # Identity file to use for authentication
     interval: 30 # Scraping interval
     collection_jitter: 2 # Optional
-  - name: reticulum2
-    type: transport_node
+  - name: lxmd1
+    type: lxmf_propagation_node
     dest_identity: someidentityhash
-    rpc_identity: /somedir/identity
+    rpc_identity: /somedir/lxmd_identity
     interval: 30
     collection_jitter: 2 # Optional

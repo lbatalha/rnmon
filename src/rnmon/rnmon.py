@@ -12,7 +12,7 @@ import RNS
 # TODO: PR to have these be configurable as arguments to RNS.Link.__init__
 
 from .Databases import InfluxWriter
-from .Remotes import RNSTransportNode
+from .Remotes import LXMFPropagationNode, RNSTransportNode
 from . import MP, RNSUtils
 
 
@@ -30,6 +30,7 @@ def main():
 
     JOB_TYPES = {
         "transport_node": RNSTransportNode,
+        "lxmf_propagation_node": LXMFPropagationNode,
         "influx": InfluxWriter
     }
 

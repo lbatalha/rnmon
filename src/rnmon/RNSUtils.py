@@ -62,6 +62,11 @@ def ensure_path(dest_hash: bytes) -> None:
                 RNS.log("[RNMon] Timed out waiting for path announcement", RNS.LOG_ERROR)
                 raise RuntimeError
 
+def set_request_timeout(link: RNS.Link, interval: int) -> int:
+        request_timeout = int(link.rtt * link.traffic_timeout_factor + RNS.Resource.RESPONSE_MAX_GRACE_TIME*1.125)
+        if request_timeout >= interval:
+            request_timeout = interval
+        return request_timeout
 
 def read_rpc_identity(rpc_identity: os.PathLike) -> RNS.Identity:
     mgmt_identity = RNS.Identity.from_file(os.path.expanduser(rpc_identity))
