@@ -2,7 +2,19 @@
 
 RNMon is a simple monitoring daemon designed to monitor the status of multiple RNS applications and push the metrics over http using the influx line protocol.
 
+## Supported Applications
+
+* Reticulum Nodes (Transport mode enabled or disabled, they export mostly the same metrics)
+
 ## Installing
+
+The package is available in [PyPI](https://pypi.org/project/rnmon/), install it with your python package manager of choice
+
+I recommend using [`uv`](https://docs.astral.sh/uv/) since it cleanly manages an environment if you run or install it as a tool:
+
+Execute it simply: `uvx rnmon`
+
+Install it globally (but in its own environment): `uv tool install rnmon` and run `rnmon`
 
 ## Configuration
 
