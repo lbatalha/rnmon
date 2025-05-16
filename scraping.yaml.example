@@ -1,21 +1,23 @@
 
 influxdb:
   address: "https://victoriametrics/api/v2/write?db=metrics"
-  http_headers:
+  http_headers: # Optional dictionary of HTTP headers to send with each request.
     Authorization: "Bearer sometoken"
     Stream-Mode: "1"
-  batch_size: 1000
-  flush_interval: 60
-
+  batch_size: 1000 # Maximum number of metrics to buffer before sending to InfluxDB.
+  flush_interval: 60 # Maximum time to wait before sending metrics to InfluxDB.
+  flush_jitter: 0 # Optional, jitter to add to flush_interval, might help with load spikes.
 
 targets:
-  - name: reticulum1
-    type: transport_node
-    dest_identity: someidentityhash
-    rpc_identity: /somedir/identity
-    interval: 10
+  - name: reticulum1 # Name of the target, used as the `node_name` field in metrics
+    type: transport_node # Type of reticulum application to scrape
+    dest_identity: someidentityhash # The base destination identity hash, the application address is calculated from this automatically based on the type above
+    rpc_identity: /somedir/identity # Identity file to use for authentication
+    interval: 30 # Scraping interval
+    collection_jitter: 2 # Optional
   - name: reticulum2
     type: transport_node
     dest_identity: someidentityhash
     rpc_identity: /somedir/identity
-    interval: 10
+    interval: 30
+    collection_jitter: 2 # Optional

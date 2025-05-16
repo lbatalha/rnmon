@@ -1,16 +1,16 @@
 [project]
 name = "rnmon"
 version = "0.1.0"
-description = "RNS Monitoring Agent"
+description = "Reticulum Monitoring Daemon"
 readme = "README.md"
 authors = [
     { name = "lbatalha" }
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "pyyaml>=6.0.2",
     "requests>=2.32.3",
-    "rns>=0.9.5",
+    "rns>=0.9.6",
 ]
 
 [project.scripts]

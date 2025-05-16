@@ -1,270 +1,19 @@
-import os
 import sys
 import time
-import random
-import re
-import argparse
 import signal
-import importlib
+import argparse
 import concurrent.futures
-import multiprocessing as mp
-from collections import deque
-from pprint import pp
-from queue import Empty, Full
 
-import requests
-from yaml import safe_load, dump
+from yaml import safe_load
 
 import RNS
-RNS.Link.KEEPALIVE=1
-RNS.Link.STALE_TIME=2*RNS.Link.KEEPALIVE
+# RNS.Link.KEEPALIVE=10
+# RNS.Link.STALE_TIME=2*RNS.Link.KEEPALIVE
 # TODO: PR to have these be configurable as arguments to RNS.Link.__init__
 
-# Line protocol translation table to escape invalid tag/label characters
-lproto_label_ttable = str.maketrans({
-    " ": "\\ ",
-    ",": "\\,"
-})
-
-metric_queue = mp.Queue(10000)
-terminate = mp.Event()
-
-class RNSRemote:
-
-    ASPECTS = ("rnstransport", "remote", "management")
-
-    NODE_METRICS = {
-        "rxb": "rns_transport_node_rx_bytes_total",
-        "txb": "rns_transport_node_tx_bytes_total",
-        "transport_uptime": "rns_transport_node_uptime_s",
-        "link_count": "rns_transport_node_link_count", # returned as second array element, unlabelled...
-    }
-    NODE_LABELS = {
-        "transport_id": "transport_id",
-    }
-    IFACE_METRICS = {
-        "clients": "rns_iface_client_count",
-        "bitrate": "rns_iface_bitrate",
-        "status": "rns_iface_up",
-        "mode": "rns_iface_mode",
-        "rxb": "rns_iface_rx_bytes_total",
-        "txb": "rns_iface_tx_bytes_total",
-        "held_announces": "rns_iface_announces_held_count",
-        "announce_queue": "rns_iface_announces_queue_count",
-        "incoming_announce_frequency": "rns_iface_announces_rx_rate",
-        "outgoing_announce_frequency": "rns_iface_announces_tx_rate",
-    }
-    IFACE_LABELS = {
-        "type": "type",
-        "short_name": "name",
-    }
-
-    def __init__(self, interval: int, dest_identity: str, rpc_identity: os.PathLike, configpath: str, verbosity: int, **kwargs):
-        self.link: RNS.Link
-        self.remote_dest: RNS.Destination
-
-        self.interval = interval
-        self.node_name = kwargs.pop('name', dest_identity) # Optional name to use in metric labels
-        self.dest_ident_hexhash = dest_identity # Destination identity hex hash
-        self.identity = rpc_identity # Identity file path to use to identify for remote management
-        self.configpath = configpath
-
-        #self.request_timeout = interval
-
-        validate_hexhash(self.dest_ident_hexhash)
-
-        # Derive destination application address hash from identity hex hash
-        self.dest_hash = RNS.Destination.hash_from_name_and_identity( \
-            '.'.join(RNSRemote.ASPECTS), bytes.fromhex(self.dest_ident_hexhash))
-
-        # Initialize Reticulum Instance
-        RNS.Reticulum(configdir=configpath, verbosity=verbosity)
-
-        self._ensure_path()
-
-        RNS.log(f"Loading identity from '{self.identity}'", RNS.LOG_INFO)
-        self.mgmt_identity = RNS.Identity.from_file(os.path.expanduser(self.identity))
-        if not self.mgmt_identity:
-            #RNS.Identity.load() should propagate exceptions... q_q
-            raise FileNotFoundError("Failed to load identity, check path and permissions.")
-        RNS.log(f"Loaded identity from '{self.identity}'", RNS.LOG_INFO)
-
-        RNS.log(f"Setting up Destination: {RNS.prettyhexrep(self.dest_hash)}", RNS.LOG_INFO)
-        self.remote_dest = RNS.Destination(
-            RNS.Identity.recall(self.dest_hash),
-            RNS.Destination.OUT,
-            RNS.Destination.SINGLE,
-            *RNSRemote.ASPECTS
-        )
-
-        self._establish_link()
-        self.run()
-
-    def run(self):
-        print(f"Starting Main")
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        while not terminate.is_set():
-            # try:
-            #    print(metric_queue.get_nowait())
-            # except Empty:
-            #     RNS.log("Metric queue is empty, nothing to get", RNS.LOG_WARNING)
-            if self.link.status != RNS.Link.ACTIVE:
-                RNS.log(f"Link Status: {self.link.status}", RNS.LOG_DEBUG) #DEBUG
-                RNS.log(f"Link establishment timeout: {self.link.establishment_timeout}", RNS.LOG_DEBUG) #DEBUG
-                time.sleep(0.2) #DEBUG
-                continue
-            try:
-                # No point in spamming requests if the last one hasnt timed out yet, save local and network resources
-                if not self.link.pending_requests:
-                    req = self.link.request(
-                        "/status",
-                        data = [True],
-                        response_callback = self._on_response,
-                        failed_callback = self._on_request_fail,
-                        timeout = self.request_timeout
-                    )
-                    RNS.log(f"Sending request {RNS.prettyhexrep(req.request_id)}", RNS.LOG_EXTREME)
-            except Exception as e:
-                RNS.log(f"Error while sending request over the link: {str(e)}")
-
-            time.sleep(self.interval)
-        RNS.log(f"Terminating RNSRemote", RNS.LOG_INFO)
-
-    def _ensure_path(self):
-        if not RNS.Transport.has_path(self.dest_hash):
-            RNS.log("No path to destination known. Requesting path and waiting for announce to arrive...")
-            RNS.Transport.request_path(self.dest_hash)
-            while not RNS.Transport.has_path(self.dest_hash):
-                time.sleep(0.2)
-
-    def _establish_link(self):
-        # Always make sure we have a valid path before linking, there is an edge case where when >1 clients
-        # are connected to the same shared instance, if the destination being linked to is directly connected
-        # to their shared instance and it dies or gets restarted, the link establishment timeout is set to maximum value
-        # because the path state is somehow lost or expires. hops_to() returns Transport.PATHFINDER_M causing the Link.__init__
-        # establishment_timeout to be huge (https://github.com/markqvist/Reticulum/blob/9a1884cfecf0daa20afc194432569208c7e457c3/RNS/Link.py#L277)
-        # I dont know what race condition or weird edge case causes this Link reset, and it only happens with a shared instance with >1
-        # clients and only if their link dest is directly connected to their own instance. Just restarting the destination
-        # continuosly will eventually trigger the issue. This happens even if there is a circular topology with 3 rns instances
-        # where the shared instance is connected to two others, and those are each connected between themselves
-        self._ensure_path()
-        RNS.log("Establishing a new link with server")
-        self.link = RNS.Link(self.remote_dest)
-        self.link.set_link_established_callback(self._on_link_established)
-        self.link.set_link_closed_callback(self._on_link_closed)
-
-    def _on_link_established(self, link: RNS.Link) -> None:
-        RNS.log("Link established with server", RNS.LOG_DEBUG)
-        RNS.log(f"KEEPALIVE interval: {link.KEEPALIVE}s, Stale time: {link.stale_time}s", RNS.LOG_DEBUG)
-        link.identify(self.mgmt_identity)
-        self.request_timeout = link.rtt * link.traffic_timeout_factor + RNS.Resource.RESPONSE_MAX_GRACE_TIME*1.125
-        if self.request_timeout >= self.interval:
-           self.request_timeout = self.interval
-        RNS.log(f"Set Request timeout: {self.request_timeout}s", RNS.LOG_DEBUG)
-
-    def _on_link_closed(self, link: RNS.Link) -> None:
-        reason = link.teardown_reason
-        if reason == RNS.Link.TIMEOUT:
-            RNS.log("The link timed out, reconnecting", RNS.LOG_WARNING)
-            self._establish_link()
-        elif reason == RNS.Link.DESTINATION_CLOSED:
-            RNS.log("The link was closed by the server, reconnecting", RNS.LOG_WARNING)
-            self._establish_link()
-        else:
-            RNS.log("Link closed unexpectedly, terminating", RNS.LOG_ERROR)
-
-
-    def _on_response(self, response) -> None:
-        RNS.log("Raw Response:", RNS.LOG_EXTREME)
-        self._parse_metrics(response.response)
-
-    def _on_request_fail(self, response) -> None:
-        RNS.log(f"The request {RNS.prettyhexrep(response.request_id)} failed.", RNS.LOG_DEBUG)
-
-    def _parse_metrics(self, data: list) -> None:
-        iface_labels = {}
-        iface_metrics = {}
-        node_labels = {}
-        node_metrics = {}
-        t = time.time_ns()
-
-        # link_count isnt labeled >.>
-        node_metrics[RNSRemote.NODE_METRICS['link_count']] = data[1]
-
-        for mk, mv in data[0].items():
-            if mk == 'interfaces':
-                for iface in mv:
-                    for k, v in iface.items():
-                        if k in RNSRemote.IFACE_METRICS:
-                            iface_metrics[RNSRemote.IFACE_METRICS[k]] = v
-                        if k in RNSRemote.IFACE_LABELS:
-                            iface_labels[RNSRemote.IFACE_LABELS[k]] = v.translate(lproto_label_ttable)
-
-                    iface_labels['identity'] = self.dest_ident_hexhash
-                    iface_labels['node_name'] = self.node_name
-
-                    # convert to influx line format
-                    labels = ",".join(f"{k}={v}" for k, v in iface_labels.items())
-                    for k, v in iface_metrics.items():
-                        metric = f"{k},{labels} value={v} {t}"
-                        try:
-                            metric_queue.put_nowait(metric)
-                        except Full:
-                            RNS.log("Metric queue is full, dropping older metrics", RNS.LOG_EXTREME)
-                            metric_queue.get_nowait()
-                            metric_queue.put_nowait(metric)
-            else:
-                if mk in RNSRemote.NODE_METRICS:
-                    node_metrics[RNSRemote.NODE_METRICS[mk]] = mv
-
-                node_labels['identity'] = self.dest_ident_hexhash
-                node_labels['node_name'] = self.node_name
-
-                #convert to influx line format
-                labels = ",".join(f"{k}={v}" for k, v in node_labels.items())
-                for k, v in node_metrics.items():
-                    metric = f"{k},{labels} value={v} {t}"
-                    try:
-                        metric_queue.put_nowait(metric)
-                    except Full:
-                        RNS.log("Metric queue is full, dropping older metrics", RNS.LOG_EXTREME)
-                        metric_queue.get_nowait()
-                        metric_queue.put_nowait(metric)
-
-
-def validate_hexhash(hexhash: str) -> None:
-        dest_len = (RNS.Reticulum.TRUNCATED_HASHLENGTH//8)*2
-        if len(hexhash) != dest_len:
-            raise TypeError(f"Destination length is invalid, must be {dest_len} hexadecimal characters ({dest_len//2} bytes)")
-
-class InfluxWriter:
-    def __init__(self, address: str, batch_size: int = 1000, flush_interval: int = 5, **kwargs):
-        self.maxlen = batch_size
-        self.flush_interval = flush_interval
-        self.address = address
-        self.http_headers = kwargs.pop('http_headers', None)
-        self.run()
-
-    def run(self):
-        push_queue = deque([],maxlen=self.maxlen)
-        metric_count: int = 0
-        last_push = time.time()
-        print("Started InfluxWriter")
-        while not terminate.is_set():
-            try:
-                push_queue.append(metric_queue.get_nowait())
-                metric_count += 1
-            except Empty:
-                pass
-            if metric_count == self.maxlen-1 or time.time() - last_push >  self.flush_interval:
-                print(f"[InfluxWriter] Pushing metrics - Count: {metric_count} Time: {int(time.time() - last_push)}s")
-                metric_count = 0
-                last_push = time.time()
-                r = requests.post(self.address, headers=self.http_headers, data="\n".join(push_queue))
-                r.raise_for_status()
-            time.sleep(0.005)
-        print(f"Terminating InfluxWriter")
+from .Databases import InfluxWriter
+from .Remotes import RNSTransportNode
+from . import MP, RNSUtils
 
 
 
@@ -280,45 +29,55 @@ def main():
     config = safe_load(args.config)
 
     JOB_TYPES = {
-        "transport_node": RNSRemote,
+        "transport_node": RNSTransportNode,
         "influx": InfluxWriter
     }
+
+    # Init Reticulum instance
+    RNS.Reticulum(configdir=args.rns_config, verbosity=args.verbose)
+
+    def sig_handler(signum, frame):
+        MP.terminate.set()
+    signal.signal(signal.SIGINT, sig_handler)
+    signal.signal(signal.SIGTERM, sig_handler)
 
     jobs = []
     # Setup InfluxWriter push job
     jobs.append({"type": "influx"} | config['influxdb'])
     # Setup Scraping Jobs
     for target in config['targets']:
-        jobs.append({"configpath": args.rns_config, "verbosity": args.verbose} | target)
+        RNSUtils.validate_hexhash(target['dest_identity'])
+        jobs.append({"verbosity": args.verbose} | target)
 
-    def sig_handler(signum, frame):
-        terminate.set()
-    signal.signal(signal.SIGINT, sig_handler)
-    signal.signal(signal.SIGTERM, sig_handler)
+    futures = {}
+    with concurrent.futures.ThreadPoolExecutor(len(jobs)) as executor:
 
-    with concurrent.futures.ProcessPoolExecutor(mp_context=mp.get_context("fork")) as executor:
-            # I WILL commit crimes >:3
-            futures = {executor.submit(JOB_TYPES[job['type']], **job): job for job in jobs}
-            while len(futures) > 0:
-                new_jobs = {}
-                done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
-                if terminate.is_set():
-                    print("Terminating processes")
-                    time.sleep(5)
-                    for pid, proc in executor._processes.items():
-                        proc.terminate()
-                    break
-                else:
-                    for future in done:
-                        if future.exception():
-                            print(f"Job exited with exception: \"{future.exception()}\"")
-                            job = futures[future]
-                            print(f"Job Exception Restart: {JOB_TYPES[job['type']]}")
-                            new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
-                    futures = new_jobs
-                time.sleep(1)
+        for job in jobs:
+            futures[executor.submit(JOB_TYPES[job['type']], **job )] = job
 
-    print("Exiting")
+        while len(futures) > 0:
+            new_jobs = {}
+            done, not_done = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
+            if MP.terminate.is_set():
+                break
+            for future in done:
+                job = futures[future]
+                if future.exception():
+                    RNS.log(f"[RNMon] Job exited with exception: \"{future.exception()}\"", RNS.LOG_WARNING)
+                    RNS.log(f"[RNMon] Job Exception Restart: {JOB_TYPES[job['type']]}", RNS.LOG_WARNING)
+                new_jobs[executor.submit(JOB_TYPES[job['type']], **job)] = job
+            for future in not_done:
+                job = futures[future]
+                new_jobs[future] = job
+            futures = new_jobs
+            time.sleep(1)
+
+
+    # RNS.exit() calls os._exit(), It does not clean things up properly
+    # and triggers semaphore_tracker:UserWarning since multiprocessing.resource_tracker
+    # is running, as intended, until it is terminated on main thread exit
+    # RNS.exit()
+    RNS.Reticulum.exit_handler()
     sys.exit(0)
 
 if __name__ == '__main__':
