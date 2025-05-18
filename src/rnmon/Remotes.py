@@ -25,6 +25,12 @@ class RNSTransportNode:
         "announce_queue": "rns_iface_announces_queue_count",
         "incoming_announce_frequency": "rns_iface_announces_rx_rate",
         "outgoing_announce_frequency": "rns_iface_announces_tx_rate",
+        "battery_percent": "rns_iface_rnode_battery_percent",
+        "channel_load_long": "rns_iface_rnode_channel_load_long_percent",
+        "channel_load_short": "rns_iface_rnode_channel_load_short_percent",
+        "airtime_long": "rns_iface_rnode_airtime_long_percent",
+        "airtime_short": "rns_iface_rnode_airtime_short_percent",
+        "noise_floor": "rns_iface_rnode_noise_floor",
     }
     IFACE_LABELS = {
         "type": "type",
@@ -39,7 +45,7 @@ class RNSTransportNode:
         self.link = RNSUtils.establish_link(dest_identity, rpc_identity, self)
         self.interval = interval
         self.collection_jitter = kwargs.setdefault('collection_jitter', 0)
-
+        self.collect_client_ifaces = kwargs.setdefault('collect_client_ifaces', False)
         # Used for metric labeling
         self.node_name = name
         self.dest_identity = dest_identity
@@ -98,8 +104,10 @@ class RNSTransportNode:
         for mk, mv in data[0].items():
             if mk == 'interfaces':
                 for iface in mv:
-                    if iface['short_name'].startswith('Client on'):
-                        continue
+                    if 'Client' in iface['type']:
+                        if not self.collect_client_ifaces:
+                            continue
+                        iface_labels['client_address'] = iface['name'].split('/')[-1]
 
                     for k, v in iface.items():
                         if k in RNSTransportNode.IFACE_METRICS:
@@ -136,8 +144,10 @@ class LXMFPropagationNode:
     NODE_METRICS = {
         "autopeer_maxdepth": "lxmf_pn_autopeer_maxdepth",
         "delivery_limit": "lxmf_pn_delivery_limit",
-        "discovered_peers": "lxmf_pn_discovered_peers_total",
+        "discovered_peers": "lxmf_pn_discovered_peers_count",
         "max_peers": "lxmf_pn_max_peers",
+        "total_peers": "lxmf_pn_peers_count",
+        "static_peers": "lxmf_pn_static_peers_count",
         "propagation_limit": "lxmf_pn_propagation_limit",
         "unpeered_propagation_incoming": "lxmf_pn_unpeered_propagation_rx_total",
         "unpeered_propagation_rx_bytes": "lxmf_pn_unpeered_propagation_rx_bytes_total",
@@ -150,7 +160,7 @@ class LXMFPropagationNode:
     NODE_MESSAGESTORE_METRICS = {
         "bytes": "lxmf_pn_msgstore_bytes_total",
         "count": "lxmf_pn_msgstore_count",
-        "limit": "lxmf_pn_msgstore_limit",
+        "limit": "lxmf_pn_msgstore_bytes_limit",
     }
     PEER_METRICS = {
         "ler": "lxmf_pn_peer_link_establishment_rate",
@@ -159,6 +169,7 @@ class LXMFPropagationNode:
         "last_sync_attempt": "lxmf_pn_peer_last_sync_attempt",
         "next_sync_attempt": "lxmf_pn_peer_next_sync_attempt",
         "state": "lxmf_pn_peer_state",
+        "alive": "lxmf_pn_peer_up",
         "sync_backoff": "lxmf_pn_peer_sync_backoff",
         "peering_timebase": "lxmf_pn_peer_peering_timebase",
         "tx_bytes": "lxmf_pn_peer_tx_bytes_total",

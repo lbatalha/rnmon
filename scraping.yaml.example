@@ -15,6 +15,9 @@ targets:
     rpc_identity: /somedir/identity # Identity file to use for authentication
     interval: 30 # Scraping interval
     collection_jitter: 2 # Optional
+    # Enables collecting for every client connected to an interface (RNS creates a child interface for each client)
+    # !WARNING! this can cause high cardinality since every client address will be a different metric field value
+    collect_client_ifaces: True
   - name: lxmd1
     type: lxmf_propagation_node
     dest_identity: someidentityhash
