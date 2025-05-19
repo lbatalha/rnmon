@@ -5,6 +5,12 @@ from random import randrange
 import RNS
 from . import MP, RNSUtils
 
+LPROTO_LABEL_TTABLE = str.maketrans({
+    " ": "\\ ",
+    ",": "\\,"
+})
+
+
 class RNSTransportNode:
     ASPECTS = ("rnstransport", "remote", "management")
 
@@ -36,11 +42,6 @@ class RNSTransportNode:
         "type": "type",
     }
 
-    LPROTO_LABEL_TTABLE = str.maketrans({
-        " ": "\\ ",
-        ",": "\\,"
-    })
-
     def __init__(self, interval: int, dest_identity: str, rpc_identity: os.PathLike, name: str, **kwargs) -> None:
         self.link = RNSUtils.establish_link(dest_identity, rpc_identity, self)
         self.interval = interval
@@ -52,8 +53,6 @@ class RNSTransportNode:
 
         self.request_timeout = RNSUtils.set_request_timeout(self.link, interval)
         RNS.log(f"[RNMon] Set Request timeout for '{self.node_name}': {self.request_timeout}s", RNS.LOG_EXTREME)
-
-
 
         self.run()
 
@@ -91,7 +90,7 @@ class RNSTransportNode:
         self._parse_metrics(response.response)
 
     def _on_request_fail(self, response) -> None:
-        RNS.log(f"[RNMon] The request {RNS.prettyhexrep(response.request_id)} to '{self.node_name}' failed.", RNS.LOG_DEBUG)
+        RNS.log(f"[RNMon] The request {RNS.prettyhexrep(response.request_id)} to '{self.node_name}' failed.", RNS.LOG_VERBOSE)
 
     def _parse_metrics(self, data: list) -> None:
         iface_metrics, iface_labels = {}, {}
@@ -120,7 +119,7 @@ class RNSTransportNode:
                     iface_labels['node_name'] = self.node_name
 
                     # convert to influx line format
-                    labels = ",".join(f"{k}={v.translate(RNSTransportNode.LPROTO_LABEL_TTABLE)}" for k, v in iface_labels.items())
+                    labels = ",".join(f"{k}={v.translate(LPROTO_LABEL_TTABLE)}" for k, v in iface_labels.items())
                     for k, v in iface_metrics.items():
                         metric = f"{k},{labels} value={v} {t}"
                         MP.metric_queue.append(metric)
@@ -133,7 +132,7 @@ class RNSTransportNode:
                 node_labels['node_name'] = self.node_name
 
                 #convert to influx line format
-                labels = ",".join(f"{k}={v.translate(RNSTransportNode.LPROTO_LABEL_TTABLE)}" for k, v in node_labels.items())
+                labels = ",".join(f"{k}={v.translate(LPROTO_LABEL_TTABLE)}" for k, v in node_labels.items())
                 for k, v in node_metrics.items():
                     metric = f"{k},{labels} value={v} {t}"
                     MP.metric_queue.append(metric)
@@ -187,11 +186,6 @@ class LXMFPropagationNode:
         "type": "type",
     }
 
-    LPROTO_LABEL_TTABLE = str.maketrans({
-        " ": "\\ ",
-        ",": "\\,"
-    })
-
     def __init__(self, interval: int, dest_identity: str, rpc_identity: os.PathLike, name: str, **kwargs) -> None:
         self.link = RNSUtils.establish_link(dest_identity, rpc_identity, self)
         self.interval = interval
@@ -240,7 +234,7 @@ class LXMFPropagationNode:
         self._parse_metrics(response.response)
 
     def _on_request_fail(self, response) -> None:
-        RNS.log(f"[RNMon] The request {RNS.prettyhexrep(response.request_id)} to '{self.dest_identity}' failed.", RNS.LOG_DEBUG)
+        RNS.log(f"[RNMon] The request {RNS.prettyhexrep(response.request_id)} to '{self.dest_identity}' failed.", RNS.LOG_VERBOSE)
 
     def _parse_metrics(self, data: dict) -> None:
         peer_metrics, peer_labels = {}, {}
@@ -264,7 +258,7 @@ class LXMFPropagationNode:
                     peer_labels['node_name'] = self.node_name
 
                     # convert to influx line format
-                    labels = ",".join(f"{k}={v.translate(LXMFPropagationNode.LPROTO_LABEL_TTABLE)}" for k, v in peer_labels.items())
+                    labels = ",".join(f"{k}={v.translate(LPROTO_LABEL_TTABLE)}" for k, v in peer_labels.items())
                     for k, v in peer_metrics.items():
                         metric = f"{k},{labels} value={v} {t}"
                         MP.metric_queue.append(metric)
@@ -283,7 +277,7 @@ class LXMFPropagationNode:
                 node_labels['node_name'] = self.node_name
 
                 #convert to influx line format
-                labels = ",".join(f"{k}={v.translate(LXMFPropagationNode.LPROTO_LABEL_TTABLE)}" for k, v in node_labels.items())
+                labels = ",".join(f"{k}={v.translate(LPROTO_LABEL_TTABLE)}" for k, v in node_labels.items())
                 for k, v in node_metrics.items():
                     metric = f"{k},{labels} value={v} {t}"
                     MP.metric_queue.append(metric)
