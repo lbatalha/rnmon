@@ -1,10 +1,12 @@
 [project]
 name = "rnmon"
-version = "0.3.0"
+version = "0.3.1"
 description = "Reticulum Monitoring Daemon"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
 authors = [
-    { name = "lbatalha" }
+    { name = "Laura Batalha" }
 ]
 requires-python = ">=3.9"
 dependencies = [
@@ -12,6 +14,7 @@ dependencies = [
     "requests>=2.32.3",
     "rns>=0.9.6",
 ]
+keywords = ["reticulum", "monitoring", "influx", "exporter"]
 
 [project.scripts]
 rnmon = "rnmon.rnmon:main"
