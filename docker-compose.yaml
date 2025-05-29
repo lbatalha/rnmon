@@ -1,0 +1,7 @@
+services:
+  rnmon:
+    container_name: rnmon
+    image: rnmon:latest
+    restart: unless-stopped
+    volumes:
+      - ./config:/config:rw
