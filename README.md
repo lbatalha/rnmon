@@ -9,13 +9,26 @@ RNMon is a simple monitoring daemon designed to monitor the status of multiple R
 
 ## Installing
 
-The package is available in [PyPI](https://pypi.org/project/rnmon/), install it with your python package manager of choice
+### Package
+
+The package is available in [PyPI](https://pypi.org/project/rnmon/), install it with your python package manager of choice.
 
 I recommend using [`uv`](https://docs.astral.sh/uv/) since it cleanly manages an environment if you run or install it as a tool:
 
 Execute it simply: `uvx rnmon`
 
 Install it globally (but in its own environment): `uv tool install rnmon` and run `rnmon`
+
+### Container
+
+There is a container image available at `ghcr.io/lbataha/rnmon`.
+You can use the `latest` tag, or specify the version matching the git tag you want, there are also image builds available in github actions.
+
+The repo contains a `Dockerfile` and an example `docker-compose.yml`, but you can run it simply with:
+
+```shell
+docker run --name rnmon -v /path/to/config:/config ghcr.io/lbataha/rnmon:latest
+```
 
 ## Configuration
 

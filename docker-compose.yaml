@@ -1,7 +1,7 @@
 services:
   rnmon:
     container_name: rnmon
-    image: rnmon:latest
+    image: ghcr.io/lbatalha/rnmon:latest
     restart: unless-stopped
     volumes:
       - ./config:/config:rw
