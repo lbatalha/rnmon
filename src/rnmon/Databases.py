@@ -1,7 +1,6 @@
 import time
 import requests
 from random import randrange
-from collections import deque
 
 import RNS
 from . import MP
@@ -29,9 +28,9 @@ class InfluxWriter:
                     pass
                 if data:
                     RNS.log(f"[RNMon] Pushing metrics - Count: {len(data)} Time: {int(time.time() - last_push)}s", RNS.LOG_DEBUG)
-                    r = requests.post(self.address, headers=self.http_headers, data="\n".join(data))
+                    requests.post(self.address, headers=self.http_headers, data="\n".join(data))
                 last_push = time.time()
                 jitter = randrange(-self.flush_jitter, self.flush_jitter+1)
             time.sleep(0.2)
 
-        RNS.log(f"[RNMon] Stopped InfluxWriter", RNS.LOG_INFO)
+        RNS.log("[RNMon] Stopped InfluxWriter", RNS.LOG_INFO)

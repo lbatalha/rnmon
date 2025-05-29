@@ -19,6 +19,8 @@ keywords = ["reticulum", "monitoring", "influx", "exporter"]
 [project.scripts]
 rnmon = "rnmon.rnmon:main"
 
+[tool.ruff.lint]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
