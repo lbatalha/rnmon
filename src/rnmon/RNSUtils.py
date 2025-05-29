@@ -2,7 +2,6 @@ import os
 import time
 
 import RNS
-from . import MP
 
 path_request_timeout = 30
 link_est_timeout = 30
@@ -51,7 +50,7 @@ def on_link_closed(link: RNS.Link) -> None:
 
 def ensure_path(dest_hash: bytes) -> None:
     if not RNS.Transport.has_path(dest_hash):
-        RNS.log(f"[RNMon] No path to destination known. Requesting path and waiting for announce to arrive...")
+        RNS.log("[RNMon] No path to destination known. Requesting path and waiting for announce to arrive...")
         RNS.Transport.request_path(dest_hash)
         start = time.time()
         while not RNS.Transport.has_path(dest_hash):
