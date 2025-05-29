@@ -25,4 +25,4 @@ VOLUME ["/config"]
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app/bin
-ENTRYPOINT ["./python", "rnmon", "--rns-config", "/config/reticulum", "--config", "/config/scraping.yaml"]
+ENTRYPOINT ["./python", "rnmon", "--rns-config", "/config/reticulum", "/config/scraping.yaml"]
