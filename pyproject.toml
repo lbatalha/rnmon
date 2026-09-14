@@ -1,6 +1,6 @@
 [project]
 name = "rnmon"
-version = "0.3.4"
+version = "0.3.5"
 description = "Reticulum Monitoring Daemon"
 readme = "README.md"
 license = "MIT"
@@ -12,7 +12,7 @@ requires-python = ">=3.9"
 dependencies = [
     "pyyaml>=6.0.2",
     "requests>=2.32.3",
-    "rns>=1.0.0",
+    "rns>=1.5.4",
 ]
 keywords = ["reticulum", "monitoring", "influx", "exporter"]
 

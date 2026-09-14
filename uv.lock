@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9"
 
 [[package]]
@@ -298,7 +298,7 @@ wheels = [
 
 [[package]]
 name = "rnmon"
-version = "0.3.1"
+version = "0.3.5"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
@@ -310,19 +310,20 @@ dependencies = [
 requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "requests", specifier = ">=2.32.3" },
-    { name = "rns", specifier = ">=0.9.6" },
+    { name = "rns", specifier = ">=1.5.4" },
 ]
 
 [[package]]
 name = "rns"
-version = "0.9.6"
+version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "pyserial" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/91/15/517d2e63e876a677088673853f9c947340cd2056716328f3ba4e888ae47c/rns-1.5.4.tar.gz", hash = "sha256:578508ef08dedf7c109f73a445065ca89c50a63c6a69ced7b147ed20391ceb15", size = 549347, upload-time = "2026-09-11T15:02:28.119Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/73/beb943f390cf1245a0680bf315098d053857e96681814f2eb7d79fbf8ce1/rns-0.9.6-py3-none-any.whl", hash = "sha256:a23c64a04c1e83fd0ab449f564ac904da7fd4f61c0faf68a063f486cc48b44bd", size = 416662, upload-time = "2025-05-15T20:29:16.999Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/30/ed9aa31b3f03a2dd5ff376c3fcb734f8a15c59956825bf373ab73d9fc8c2/rns-1.5.4-py3-none-any.whl", hash = "sha256:862615b12d449750c0b3c451dfc2cb189fd6da1c573c477a29f36f97d2a66a19", size = 636698, upload-time = "2026-09-11T15:02:24.329Z" },
 ]
 
 [[package]]
