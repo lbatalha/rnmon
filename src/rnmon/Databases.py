@@ -28,7 +28,10 @@ class InfluxWriter:
                     pass
                 if data:
                     RNS.log(f"[RNMon] Pushing metrics - Count: {len(data)} Time: {int(time.time() - last_push)}s", RNS.LOG_DEBUG)
-                    requests.post(self.address, headers=self.http_headers, data="\n".join(data))
+                    try:
+                        requests.post(self.address, headers=self.http_headers, data="\n".join(data)).raise_for_status()
+                    except requests.RequestException as e:
+                        RNS.log(f"[RNMon] Error when pushing metrics: {e}", RNS.LOG_ERROR)
                 last_push = time.time()
                 jitter = randrange(-self.flush_jitter, self.flush_jitter+1)
             time.sleep(0.2)
