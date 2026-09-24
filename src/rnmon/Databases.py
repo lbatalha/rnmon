@@ -5,13 +5,16 @@ from random import randrange
 import RNS
 from . import MP
 
+
 class InfluxWriter:
-    def __init__(self, address: str, batch_size: int = 1000, flush_interval: int = 5, **kwargs):
+    def __init__(
+        self, address: str, batch_size: int = 1000, flush_interval: int = 5, **kwargs
+    ):
         self.maxlen = batch_size
         self.flush_interval = flush_interval
-        self.flush_jitter = kwargs.setdefault('flush_jitter', 0)
+        self.flush_jitter = kwargs.setdefault("flush_jitter", 0)
         self.address = address
-        self.http_headers = kwargs.setdefault('http_headers', None)
+        self.http_headers = kwargs.setdefault("http_headers", None)
         self.run()
 
     def run(self):
@@ -19,7 +22,9 @@ class InfluxWriter:
         jitter = 0
         RNS.log("[RNMon] Started InfluxWriter", RNS.LOG_INFO)
         while not MP.terminate.is_set():
-            if len(MP.metric_queue) >= self.maxlen or (time.time() - last_push) >  (self.flush_interval + jitter):
+            if len(MP.metric_queue) >= self.maxlen or (time.time() - last_push) > (
+                self.flush_interval + jitter
+            ):
                 data = []
                 try:
                     for _ in range(self.maxlen):
@@ -27,13 +32,22 @@ class InfluxWriter:
                 except IndexError:
                     pass
                 if data:
-                    RNS.log(f"[RNMon] Pushing metrics - Count: {len(data)} Time: {int(time.time() - last_push)}s", RNS.LOG_DEBUG)
+                    RNS.log(
+                        f"[RNMon] Pushing metrics - Count: {len(data)} Time: {int(time.time() - last_push)}s",
+                        RNS.LOG_DEBUG,
+                    )
                     try:
-                        requests.post(self.address, headers=self.http_headers, data="\n".join(data)).raise_for_status()
+                        requests.post(
+                            self.address,
+                            headers=self.http_headers,
+                            data="\n".join(data),
+                        ).raise_for_status()
                     except requests.RequestException as e:
-                        RNS.log(f"[RNMon] Error when pushing metrics: {e}", RNS.LOG_ERROR)
+                        RNS.log(
+                            f"[RNMon] Error when pushing metrics: {e}", RNS.LOG_ERROR
+                        )
                 last_push = time.time()
-                jitter = randrange(-self.flush_jitter, self.flush_jitter+1)
+                jitter = randrange(-self.flush_jitter, self.flush_jitter + 1)
             time.sleep(0.2)
 
         RNS.log("[RNMon] Stopped InfluxWriter", RNS.LOG_INFO)
