@@ -1,6 +1,6 @@
 [project]
 name = "rnmon"
-version = "0.3.6"
+version = "0.4.0"
 description = "Reticulum Monitoring Daemon"
 readme = "README.md"
 license = "MIT"
